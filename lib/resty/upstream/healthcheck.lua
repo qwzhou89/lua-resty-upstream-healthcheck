@@ -1,4 +1,4 @@
-local stream_sock = ngx.socket.tcp
+local wss_client = require "resty.websocket.client"
 local log = ngx.log
 local ERR = ngx.ERR
 local WARN = ngx.WARN
@@ -206,23 +206,24 @@ end
 local function check_peer(ctx, id, peer, is_backup)
     local ok
     local name = peer.name
-    local statuses = ctx.statuses
-    local req = ctx.http_req
+    local error_words = ctx.error_words
+    local ws_cmds = ctx.ws_cmds
 
-    local sock, err = stream_sock()
-    if not sock then
-        errlog("failed to create stream socket: ", err)
+    local wb, err = wss_client:new()
+    if not wb then
+        errlog("failed to create websocket client: ", err)
         return
     end
 
-    sock:settimeout(ctx.timeout)
+    wb:set_timeout(ctx.timeout)
 
     if peer.host then
         -- print("peer port: ", peer.port)
-        ok, err = sock:connect(peer.host, peer.port)
+        ok, err = wb:connect("ws://" .. peer.host .. ":" .. peer.port)
     else
-        ok, err = sock:connect(name)
+        ok, err = wb:connect("ws://" .. name)
     end
+
     if not ok then
         if not peer.down then
             errlog("failed to connect to ", name, ": ", err)
@@ -230,49 +231,45 @@ local function check_peer(ctx, id, peer, is_backup)
         return peer_fail(ctx, is_backup, id, peer)
     end
 
-    local bytes, err = sock:send(req)
+    math.randomseed(os.time()) 
+    local ws_cmd = ws_cmds[math.random(#ws_cmds)]    
+    local bytes, err = wb:send_text(ws_cmd)
     if not bytes then
         return peer_error(ctx, is_backup, id, peer,
-                          "failed to send request to ", name, ": ", err)
+                          "failed to send command to ", name, ": ", err)
     end
 
-    local status_line, err = sock:receive()
-    if not status_line then
+    local cmd_resp, typ, err = wb:recv_frame()
+    if not cmd_resp then
         peer_error(ctx, is_backup, id, peer,
-                   "failed to receive status line from ", name, ": ", err)
-        if err == "timeout" then
-            sock:close()  -- timeout errors do not close the socket.
+                   "failed to receive command response from ", name, ": ", err)
+        if re_find(err, ": timeout", "joi", nil, 1) then
+            wb:close()  -- timeout errors and close the websocket.
         end
         return
     end
 
-    if statuses then
-        local from, to, err = re_find(status_line,
-                                      [[^HTTP/\d+\.\d+\s+(\d+)]],
+    warn("received response from " .. name .. ": " .. cmd_resp)
+
+    if error_words then
+        local from, to, err = re_find(cmd_resp,
+                                      error_words,
                                       "joi", nil, 1)
         if err then
-            errlog("failed to parse status line: ", err)
+            errlog("failed to find error word(s) in command response: ", err)
         end
 
-        if not from then
+        if from then
             peer_error(ctx, is_backup, id, peer,
-                       "bad status line from ", name, ": ",
-                       status_line)
-            sock:close()
-            return
-        end
-
-        local status = tonumber(sub(status_line, from, to))
-        if not statuses[status] then
-            peer_error(ctx, is_backup, id, peer, "bad status code from ",
-                       name, ": ", status)
-            sock:close()
+                       "error words in ", name, "'s command response : ",
+                       cmd_resp)
+            wb:close()
             return
         end
     end
 
     peer_ok(ctx, is_backup, id, peer)
-    sock:close()
+    wb:close()
 end
 
 local function check_peer_range(ctx, from, to, peers, is_backup)
@@ -528,13 +525,13 @@ function _M.spawn_checker(opts)
         return nil, "\"type\" option required"
     end
 
-    if typ ~= "http" then
-        return nil, "only \"http\" type is supported right now"
+    if typ ~= "ws" then
+        return nil, "only \"ws\" type is supported right now"
     end
 
-    local http_req = opts.http_req
-    if not http_req then
-        return nil, "\"http_req\" option required"
+    local ws_cmds = opts.ws_cmds
+    if not ws_cmds then
+        return nil, "\"ws_cmds\" option required"
     end
 
     local timeout = opts.timeout
@@ -545,7 +542,6 @@ function _M.spawn_checker(opts)
     local interval = opts.interval
     if not interval then
         interval = 1
-
     else
         interval = interval / 1000
         if interval < 0.002 then  -- minimum 2ms
@@ -553,16 +549,12 @@ function _M.spawn_checker(opts)
         end
     end
 
-    local valid_statuses = opts.valid_statuses
-    local statuses
-    if valid_statuses then
-        statuses = new_tab(0, #valid_statuses)
-        for _, status in ipairs(valid_statuses) do
-            -- print("found good status ", status)
-            statuses[status] = true
-        end
+    local error_words = opts.error_words
+    if not error_words then
+        error_words = ""
+    else
+        error_words = "(" .. concat(error_words,")|(") .. ")"
     end
-
     -- debug("interval: ", interval)
 
     local concur = opts.concurrency
@@ -609,13 +601,13 @@ function _M.spawn_checker(opts)
         upstream = u,
         primary_peers = preprocess_peers(ppeers),
         backup_peers = preprocess_peers(bpeers),
-        http_req = http_req,
+        ws_cmds = ws_cmds,
         timeout = timeout,
         interval = interval,
         dict = dict,
         fall = fall,
         rise = rise,
-        statuses = statuses,
+        error_words = error_words,
         version = 0,
         concurrency = concur,
     }
@@ -640,13 +632,14 @@ local function gen_peers_status_info(peers, bits, idx)
     for i = 1, npeers do
         local peer = peers[i]
         bits[idx] = "        "
-        bits[idx + 1] = peer.name
+        bits[idx + 1] = peer.id .. " "
+        bits[idx + 2] = peer.name
         if peer.down then
-            bits[idx + 2] = " DOWN\n"
+            bits[idx + 3] = " DOWN\n"
         else
-            bits[idx + 2] = " up\n"
+            bits[idx + 3] = " up\n"
         end
-        idx = idx + 3
+        idx = idx + 4
     end
     return idx
 end
