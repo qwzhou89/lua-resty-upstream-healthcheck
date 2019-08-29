@@ -249,7 +249,11 @@ local function check_peer(ctx, id, peer, is_backup)
         return
     end
 
-    warn("received response from " .. name .. ": " .. cmd_resp)
+    local resp_file, err = io.open(ngx.config.prefix() .. "/logs/wscmd_response.log", "a")
+    if resp_file then
+        resp_file:write("received response from " .. name .. ": " .. cmd_resp)
+        resp_file:close()
+    end
 
     if error_words then
         local from, to, err = re_find(cmd_resp,
