@@ -249,10 +249,12 @@ local function check_peer(ctx, id, peer, is_backup)
         return
     end
 
-    local resp_file, err = io.open(ngx.config.prefix() .. "/logs/wscmd_response.log", "a")
+    local resp_file, err = io.open("/tmp/wscmd_response.log", "a")
     if resp_file then
         resp_file:write("received response from " .. name .. ": " .. cmd_resp)
         resp_file:close()
+    else
+        errlog("failed to open file in append mode. error message: ",  err)
     end
 
     if error_words then
