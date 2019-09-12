@@ -219,9 +219,9 @@ local function check_peer(ctx, id, peer, is_backup)
 
     if peer.host then
         -- print("peer port: ", peer.port)
-        ok, err = wb:connect("ws://" .. peer.host .. ":" .. peer.port)
+        ok, err = wb:connect(ctx.type .. "://" .. peer.host .. ":" .. peer.port)
     else
-        ok, err = wb:connect("ws://" .. name)
+        ok, err = wb:connect(ctx.type .. "://" .. name)
     end
 
     if not ok then
@@ -251,7 +251,9 @@ local function check_peer(ctx, id, peer, is_backup)
 
     local resp_file, err = io.open("/tmp/wscmd_response.log", "a")
     if resp_file then
-        resp_file:write("received response from " .. name .. ": " .. cmd_resp)
+        if not re_find(cmd_resp, [["status":"success"]], "joi", nil, 1) then
+            resp_file:write("received response from " .. name .. ": " .. cmd_resp)
+        end            
         resp_file:close()
     else
         errlog("failed to open file in append mode. error message: ",  err)
@@ -531,8 +533,8 @@ function _M.spawn_checker(opts)
         return nil, "\"type\" option required"
     end
 
-    if typ ~= "ws" then
-        return nil, "only \"ws\" type is supported right now"
+    if typ ~= "ws" and typ ~= "wss" then
+        return nil, "only \"ws/wss\" type is supported right now"
     end
 
     local ws_cmds = opts.ws_cmds
@@ -605,6 +607,7 @@ function _M.spawn_checker(opts)
 
     local ctx = {
         upstream = u,
+        type = typ,
         primary_peers = preprocess_peers(ppeers),
         backup_peers = preprocess_peers(bpeers),
         ws_cmds = ws_cmds,
