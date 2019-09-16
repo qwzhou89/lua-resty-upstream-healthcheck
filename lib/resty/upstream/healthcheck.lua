@@ -206,8 +206,7 @@ end
 local function check_peer(ctx, id, peer, is_backup)
     local ok
     local name = peer.name
-    local error_words = ctx.error_words
-    local ws_cmds = ctx.ws_cmds
+    local ws_cmd_checks = ctx.ws_cmd_checks
 
     local wb, err = wss_client:new()
     if not wb then
@@ -232,8 +231,8 @@ local function check_peer(ctx, id, peer, is_backup)
     end
 
     math.randomseed(os.time()) 
-    local ws_cmd = ws_cmds[math.random(#ws_cmds)]    
-    local bytes, err = wb:send_text(ws_cmd)
+    local ws_cmd_check = ws_cmd_checks[math.random(#ws_cmd_checks)]    
+    local bytes, err = wb:send_text(ws_cmd_check[1])
     if not bytes then
         return peer_error(ctx, is_backup, id, peer,
                           "failed to send command to ", name, ": ", err)
@@ -243,38 +242,55 @@ local function check_peer(ctx, id, peer, is_backup)
     if not cmd_resp then
         peer_error(ctx, is_backup, id, peer,
                    "failed to receive command response from ", name, ": ", err)
-        if re_find(err, ": timeout", "joi", nil, 1) then
             wb:close()  -- timeout errors and close the websocket.
-        end
         return
+    end
+
+    local white_words = ws_cmd_check[2]
+    if white_words then
+        local from, to, err = re_find(cmd_resp, white_words, "joi")
+        if err then
+            errlog("failed to find white word(s) in command response: ", err)
+        end
+
+        if not from then
+            peer_error(ctx, is_backup, id, peer,
+                       "white words is not found in ", name, "'s command response : ",
+                       cmd_resp)
+            wb:close()
+            return
+        end
+    end
+
+    local black_words = ws_cmd_check[3]
+    if black_words then
+        local from, to, err = re_find(cmd_resp, black_words, "joi")
+        if err then
+            errlog("failed to find black word(s) in command response: ", err)
+        end
+
+        if from then
+            peer_error(ctx, is_backup, id, peer,
+                       "black words is found in ", name, "'s command response : ",
+                       cmd_resp)
+            wb:close()
+            return
+        end
     end
 
     local resp_file, err = io.open("/tmp/wscmd_response.log", "a")
     if resp_file then
-        local from, to, err = re_find(cmd_resp, [["status":"success"]], "joi", nil, 1) 
-        if err or not from then
+        local from, to, err = re_find(cmd_resp, [[\042status\042:\042success\042]], "joi") 
+        if err then
+            errlog("failed to find white word(s) in command response: ", err)
+        end
+
+        if not from then
             resp_file:write("received response from " .. name .. ": " .. cmd_resp)
         end
         resp_file:close()
     else
         errlog("failed to open file in append mode. error message: ",  err)
-    end
-
-    if error_words then
-        local from, to, err = re_find(cmd_resp,
-                                      error_words,
-                                      "joi", nil, 1)
-        if err then
-            errlog("failed to find error word(s) in command response: ", err)
-        end
-
-        if from then
-            peer_error(ctx, is_backup, id, peer,
-                       "error words in ", name, "'s command response : ",
-                       cmd_resp)
-            wb:close()
-            return
-        end
     end
 
     peer_ok(ctx, is_backup, id, peer)
@@ -538,9 +554,9 @@ function _M.spawn_checker(opts)
         return nil, "only \"ws/wss\" type is supported right now"
     end
 
-    local ws_cmds = opts.ws_cmds
-    if not ws_cmds then
-        return nil, "\"ws_cmds\" option required"
+    local ws_cmd_checks = opts.ws_cmd_checks
+    if not ws_cmd_checks then
+        return nil, "\"ws_cmd_checks\" option required"
     end
 
     local timeout = opts.timeout
@@ -556,13 +572,6 @@ function _M.spawn_checker(opts)
         if interval < 0.002 then  -- minimum 2ms
             interval = 0.002
         end
-    end
-
-    local error_words = opts.error_words
-    if not error_words then
-        error_words = ""
-    else
-        error_words = "(" .. concat(error_words,")|(") .. ")"
     end
     -- debug("interval: ", interval)
 
@@ -611,13 +620,12 @@ function _M.spawn_checker(opts)
         type = typ,
         primary_peers = preprocess_peers(ppeers),
         backup_peers = preprocess_peers(bpeers),
-        ws_cmds = ws_cmds,
+        ws_cmd_checks = ws_cmd_checks,
         timeout = timeout,
         interval = interval,
         dict = dict,
         fall = fall,
         rise = rise,
-        error_words = error_words,
         version = 0,
         concurrency = concur,
     }
