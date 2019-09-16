@@ -44,6 +44,7 @@ local get_backup_peers = upstream.get_backup_peers
 local get_upstreams = upstream.get_upstreams
 
 local upstream_checker_statuses = {}
+local upstream_types = {}
 
 local function warn(...)
     log(WARN, "healthcheck: ", ...)
@@ -630,6 +631,8 @@ function _M.spawn_checker(opts)
         concurrency = concur,
     }
 
+    upstream_types[upstream] = typ
+
     if debug_mode and opts.no_timer then
         check(nil, ctx)
 
@@ -713,6 +716,57 @@ function _M.status_page()
         idx = gen_peers_status_info(peers, bits, idx)
     end
     return concat(bits)
+end
+
+function _M.available_servers()
+    -- generate an list for available servers
+    local us, err = get_upstreams()
+    if not us then
+        return "failed to get upstream names: " .. err
+    end
+
+    local n = #us
+    local peers = new_tab(n * 50, 0)
+    local idx = 1
+    for i = 1, n do
+        local u = us[i]
+        
+        local type = upstream_types[u]
+        if not type then
+            type = "ws://"
+        end
+
+        -- Primary peers
+        local peers, err = get_primary_peers(u)
+        if not peers then
+            return "failed to get primary peers in upstream " .. u .. ": "
+                   .. err
+        end
+
+        for i = 1, #peers do
+            local peer = peers[i]
+            if not peer.down then
+                peers[idx] = type .. peer.name
+                idx = idx + 1
+            end
+        end
+
+        -- Backup peers
+        peers, err = get_backup_peers(u)
+        if not peers then
+            return "failed to get backup peers in upstream " .. u .. ": "
+                   .. err
+        end
+
+        for i = 1, #peers do
+            local peer = peers[i]
+            if not peer.down then
+                peers[idx] = "ws://" .. peer.name
+                idx = idx + 1
+            end
+        end
+    end
+    return peers
 end
 
 return _M
