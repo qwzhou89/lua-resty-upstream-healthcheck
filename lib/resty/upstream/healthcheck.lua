@@ -252,7 +252,7 @@ local function check_peer(ctx, id, peer, is_backup)
     local resp_file, err = io.open("/tmp/wscmd_response.log", "a")
     if resp_file then
         local from, to, err = re_find(cmd_resp, [["status":"success"]], "joi", nil, 1) 
-        if not from and not err then
+        if err or not from then
             resp_file:write("received response from " .. name .. ": " .. cmd_resp)
         end
         resp_file:close()
