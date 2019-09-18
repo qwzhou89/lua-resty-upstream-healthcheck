@@ -279,19 +279,12 @@ local function check_peer(ctx, id, peer, is_backup)
         end
     end
 
-    local resp_file, err = io.open(ngx.config.prefix() .. "logs/wscmd_response.log", "a+")
-    if resp_file then
-        local from, to, err = re_find(cmd_resp, [[\042status\042:\042success\042]], "joi") 
-        if err then
-            errlog("failed to find ".. [[\042status\042:\042success\042]].. " in command response: ", err)
-        end
-
-        if not from then
-            resp_file:write("received response from " .. name .. ": " .. cmd_resp)
-        end
-        resp_file:close()
-    else
-        errlog("failed to open file in append mode. error message: ",  err)
+    local from, to, err = re_find(cmd_resp, [[\042status\042:\042success\042]], "joi") 
+    if err then
+        errlog("failed to find ".. [[\042status\042:\042success\042]].. " in command response: ", err)
+    end
+    if not from then
+        errlog("received error response from " .. name .. ": " .. cmd_resp)
     end
 
     peer_ok(ctx, is_backup, id, peer)
