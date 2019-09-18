@@ -726,7 +726,7 @@ function _M.available_servers()
     end
 
     local n = #us
-    local peers = new_tab(n * 50, 0)
+    local servers = new_tab(n * 50, 0)
     local idx = 1
     for i = 1, n do
         local u = us[i]
@@ -746,7 +746,7 @@ function _M.available_servers()
         for i = 1, #peers do
             local peer = peers[i]
             if not peer.down then
-                peers[idx] = type .. peer.name
+                servers[idx] = type .. peer.name
                 idx = idx + 1
             end
         end
@@ -761,12 +761,12 @@ function _M.available_servers()
         for i = 1, #peers do
             local peer = peers[i]
             if not peer.down then
-                peers[idx] = "ws://" .. peer.name
+                servers[idx] = type .. peer.name
                 idx = idx + 1
             end
         end
     end
-    return peers
+    return servers
 end
 
 return _M
