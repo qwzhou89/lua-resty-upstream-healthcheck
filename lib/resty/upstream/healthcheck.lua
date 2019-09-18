@@ -279,11 +279,11 @@ local function check_peer(ctx, id, peer, is_backup)
         end
     end
 
-    local resp_file, err = io.open("/tmp/wscmd_response.log", "a")
+    local resp_file, err = io.open(ngx.config.prefix() .. "logs/wscmd_response.log", "a+")
     if resp_file then
         local from, to, err = re_find(cmd_resp, [[\042status\042:\042success\042]], "joi") 
         if err then
-            errlog("failed to find white word(s) in command response: ", err)
+            errlog("failed to find ".. [[\042status\042:\042success\042]].. " in command response: ", err)
         end
 
         if not from then
