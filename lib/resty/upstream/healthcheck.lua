@@ -38,6 +38,7 @@ if not ok or type(new_tab) ~= "function" then
     new_tab = function (narr, nrec) return {} end
 end
 
+local get_servers = upstream.get_servers
 local set_peer_down = upstream.set_peer_down
 local get_primary_peers = upstream.get_primary_peers
 local get_backup_peers = upstream.get_backup_peers
@@ -45,6 +46,7 @@ local get_upstreams = upstream.get_upstreams
 
 local upstream_checker_statuses = {}
 local upstream_types = {}
+local upstream_addr2servers = {}
 
 local function warn(...)
     log(WARN, "healthcheck: ", ...)
@@ -599,6 +601,23 @@ function _M.spawn_checker(opts)
         return nil, "no upstream specified"
     end
 
+    local srvs, err = get_servers(u)
+    if not srvs then
+        return nil, "failed to get servers: " .. err
+    else
+        for _, srv in ipairs(srvs) do
+            local srv_name = srv["name"]
+            local addrs = srv["addr"]
+            if type(addrs) == "table" then
+                for _, addr in ipairs(addrs) do
+                    upstream_addr2servers[u .. addr] = srv_name
+                end
+            else
+                upstream_addr2servers[u .. addrs] = srv_name
+            end
+        end
+    end
+
     local ppeers, err = get_primary_peers(u)
     if not ppeers then
         return nil, "failed to get primary peers: " .. err
@@ -624,7 +643,7 @@ function _M.spawn_checker(opts)
         concurrency = concur,
     }
 
-    upstream_types[upstream] = typ
+    upstream_types[u] = typ
 
     if debug_mode and opts.no_timer then
         check(nil, ctx)
@@ -726,8 +745,9 @@ function _M.available_servers()
         
         local type = upstream_types[u]
         if not type then
-            type = "ws://"
+            type = "ws"
         end
+        type = type .. "://" 
 
         -- Primary peers
         local peers, err = get_primary_peers(u)
@@ -739,7 +759,7 @@ function _M.available_servers()
         for i = 1, #peers do
             local peer = peers[i]
             if not peer.down then
-                servers[idx] = type .. peer.name
+                servers[idx] = type .. upstream_addr2servers[u .. peer.name]
                 idx = idx + 1
             end
         end
@@ -754,7 +774,7 @@ function _M.available_servers()
         for i = 1, #peers do
             local peer = peers[i]
             if not peer.down then
-                servers[idx] = type .. peer.name
+                servers[idx] = type .. upstream_addr2servers[u .. peer.name]
                 idx = idx + 1
             end
         end
