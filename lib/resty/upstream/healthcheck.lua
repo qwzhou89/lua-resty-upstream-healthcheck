@@ -738,7 +738,8 @@ function _M.available_servers()
     end
 
     local n = #us
-    local servers = new_tab(n * 50, 0)
+    local nkeys = require "table.nkeys"
+    local servers = new_tab(nkeys(upstream_addr2servers) * 2, 0)
     local idx = 1
     for i = 1, n do
         local u = us[i]
