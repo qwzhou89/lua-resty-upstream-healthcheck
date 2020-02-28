@@ -319,8 +319,10 @@ local function check_peer_rpc(ctx, id, peer, is_backup)
     })
 
     if not res then
-      ngx.say("failed to request: ", err)
-      return
+        peer_error(ctx, is_backup, id, peer,
+                   "failed to send request to ", name, ": ", err)
+            httpc:close()  -- timeout errors and close the websocket.
+        return
     end
 
     local cmd_resp, err = res:read_body()
