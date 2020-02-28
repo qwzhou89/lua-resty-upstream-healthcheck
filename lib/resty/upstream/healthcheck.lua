@@ -208,17 +208,6 @@ local function peer_error(ctx, is_backup, id, peer, ...)
     peer_fail(ctx, is_backup, id, peer)
 end
 
-local function check_peer(ctx, id, peer, is_backup)
-    local typ = ctx.type
-    if typ == "http" then
-        check_peer_http(ctx, id, peer, is_backup) 
-    elseif typ == "rpc" then
-        check_peer_rpc(ctx, id, peer, is_backup)
-    elseif typ == "ws" or typ == "wss" then
-        check_peer_ws(ctx, id, peer, is_backup)
-    end
-end
-
 local function check_peer_http(ctx, id, peer, is_backup)
     local ok
     local name = peer.name
@@ -471,6 +460,17 @@ local function check_peer_ws(ctx, id, peer, is_backup)
 
     peer_ok(ctx, is_backup, id, peer)
     wb:close()
+end
+
+local function check_peer(ctx, id, peer, is_backup)
+    local typ = ctx.type
+    if typ == "http" then
+        check_peer_http(ctx, id, peer, is_backup) 
+    elseif typ == "rpc" then
+        check_peer_rpc(ctx, id, peer, is_backup)
+    elseif typ == "ws" or typ == "wss" then
+        check_peer_ws(ctx, id, peer, is_backup)
+    end
 end
 
 local function check_peer_range(ctx, from, to, peers, is_backup)
