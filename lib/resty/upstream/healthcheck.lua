@@ -1,4 +1,6 @@
 local wss_client = require "resty.websocket.client"
+local http = require "resty.http"
+local stream_sock = ngx.socket.tcp
 local log = ngx.log
 local ERR = ngx.ERR
 local WARN = ngx.WARN
@@ -207,6 +209,184 @@ local function peer_error(ctx, is_backup, id, peer, ...)
 end
 
 local function check_peer(ctx, id, peer, is_backup)
+    local typ = ctx.type
+    if typ == "http" then
+        check_peer_http(ctx, id, peer, is_backup) 
+    elseif typ == "rpc" then
+        check_peer_rpc(ctx, id, peer, is_backup)
+    elseif typ == "ws" or typ == "wss" then
+        check_peer_ws(ctx, id, peer, is_backup)
+    end
+end
+
+local function check_peer_http(ctx, id, peer, is_backup)
+    local ok
+    local name = peer.name
+    local statuses = ctx.statuses
+    local req = ctx.http_req
+
+    local sock, err = stream_sock()
+    if not sock then
+        errlog("failed to create stream socket: ", err)
+        return
+    end
+
+    sock:settimeout(ctx.timeout)
+
+    if peer.host then
+        -- print("peer port: ", peer.port)
+        ok, err = sock:connect(peer.host, peer.port)
+    else
+        ok, err = sock:connect(name)
+    end
+    if not ok then
+        if not peer.down then
+            errlog("failed to connect to ", name, ": ", err)
+        end
+        return peer_fail(ctx, is_backup, id, peer)
+    end
+
+    local bytes, err = sock:send(req)
+    if not bytes then
+        return peer_error(ctx, is_backup, id, peer,
+                          "failed to send request to ", name, ": ", err)
+    end
+
+    local status_line, err = sock:receive()
+    if not status_line then
+        peer_error(ctx, is_backup, id, peer,
+                   "failed to receive status line from ", name, ": ", err)
+        if err == "timeout" then
+            sock:close()  -- timeout errors do not close the socket.
+        end
+        return
+    end
+
+    if statuses then
+        local from, to, err = re_find(status_line,
+                                      [[^HTTP/\d+\.\d+\s+(\d+)]],
+                                      "joi", nil, 1)
+        if err then
+            errlog("failed to parse status line: ", err)
+        end
+
+        if not from then
+            peer_error(ctx, is_backup, id, peer,
+                       "bad status line from ", name, ": ",
+                       status_line)
+            sock:close()
+            return
+        end
+
+        local status = tonumber(sub(status_line, from, to))
+        if not statuses[status] then
+            peer_error(ctx, is_backup, id, peer, "bad status code from ",
+                       name, ": ", status)
+            sock:close()
+            return
+        end
+    end
+
+    peer_ok(ctx, is_backup, id, peer)
+    sock:close()
+end
+
+local function check_peer_rpc(ctx, id, peer, is_backup)
+    local ok
+    local name = peer.name
+    local rpc_cmd_checks = ctx.rpc_cmd_checks
+
+    local httpc, err = http:new()
+    if not httpc then
+        errlog("failed to create http client: ", err)
+        return
+    end
+
+    httpc:set_timeout(ctx.timeout)
+
+    if peer.host then
+        -- print("peer port: ", peer.port)
+        ok, err = httpc:connect(peer.host, peer.port)
+    else
+        ok, err = httpc:connect(name)
+    end
+
+    if not ok then
+        if not peer.down then
+            errlog("failed to connect to ", name, ": ", err)
+        end
+        return peer_fail(ctx, is_backup, id, peer)
+    end
+
+    math.randomseed(os.time()) 
+    local rpc_cmd_check = rpc_cmd_checks[math.random(#rpc_cmd_checks)]    
+    local res, err = httpc:request({
+        path = "/",
+        method = "POST",
+        body = rpc_cmd_check,
+        headers = {
+          ["Content-Type"] = "application/json",
+        }
+    })
+
+    if not res then
+      ngx.say("failed to request: ", err)
+      return
+    end
+
+    local cmd_resp, err = res:read_body()
+    if not cmd_resp then
+        peer_error(ctx, is_backup, id, peer,
+                   "failed to receive command response from ", name, ": ", err)
+            httpc:close()  -- timeout errors and close the websocket.
+        return
+    end
+
+    local white_words = rpc_cmd_check[2]
+    if white_words then
+        local from, to, err = re_find(cmd_resp, white_words, "joi")
+        if err then
+            errlog("failed to find white word(s) in command response: ", err)
+        end
+
+        if not from then
+            peer_error(ctx, is_backup, id, peer,
+                       "white words is not found in ", name, "'s command response : ",
+                       cmd_resp)
+            httpc:close()
+            return
+        end
+    end
+
+    local black_words = rpc_cmd_check[3]
+    if black_words then
+        local from, to, err = re_find(cmd_resp, black_words, "joi")
+        if err then
+            errlog("failed to find black word(s) in command response: ", err)
+        end
+
+        if from then
+            peer_error(ctx, is_backup, id, peer,
+                       "black words is found in ", name, "'s command response : ",
+                       cmd_resp)
+            httpc:close()
+            return
+        end
+    end
+
+    local from, to, err = re_find(cmd_resp, [[\042status\042:\042success\042]], "joi") 
+    if err then
+        errlog("failed to find ".. [[\042status\042:\042success\042]].. " in command response: ", err)
+    end
+    if not from then
+        errlog("received error response from " .. name .. ": " .. cmd_resp)
+    end
+
+    peer_ok(ctx, is_backup, id, peer)
+    httpc:close()
+end
+
+local function check_peer_ws(ctx, id, peer, is_backup)
     local ok
     local name = peer.name
     local ws_cmd_checks = ctx.ws_cmd_checks
@@ -546,13 +726,23 @@ function _M.spawn_checker(opts)
         return nil, "\"type\" option required"
     end
 
-    if typ ~= "ws" and typ ~= "wss" then
-        return nil, "only \"ws/wss\" type is supported right now"
+    if typ ~= "http" and typ ~= "ws" and typ ~= "wss" and typ ~= "rpc" then
+        return nil, "only \"http/ws/wss/rpc\" type is supported right now"
+    end
+
+    local http_req = opts.http_req
+    if typ == "http" and not http_req then
+        return nil, "\"http_req\" option required"
     end
 
     local ws_cmd_checks = opts.ws_cmd_checks
-    if not ws_cmd_checks then
+    if (typ == "ws" or typ == "wss") and not ws_cmd_checks then
         return nil, "\"ws_cmd_checks\" option required"
+    end
+
+    local rpc_cmd_checks = opts.rpc_cmd_checks
+    if typ == "rpc" and not rpc_cmd_checks then
+        return nil, "\"rpc_cmd_checks\" option required"
     end
 
     local timeout = opts.timeout
@@ -569,6 +759,17 @@ function _M.spawn_checker(opts)
             interval = 0.002
         end
     end
+
+    local valid_statuses = opts.valid_statuses
+    local statuses
+    if valid_statuses then
+        statuses = new_tab(0, #valid_statuses)
+        for _, status in ipairs(valid_statuses) do
+            -- print("found good status ", status)
+            statuses[status] = true
+        end
+    end
+
     -- debug("interval: ", interval)
 
     local concur = opts.concurrency
@@ -633,12 +834,15 @@ function _M.spawn_checker(opts)
         type = typ,
         primary_peers = preprocess_peers(ppeers),
         backup_peers = preprocess_peers(bpeers),
+        http_req = http_req,
         ws_cmd_checks = ws_cmd_checks,
+        rpc_cmd_checks = rpc_cmd_checks,
         timeout = timeout,
         interval = interval,
         dict = dict,
         fall = fall,
         rise = rise,
+        statuses = statuses,
         version = 0,
         concurrency = concur,
     }
@@ -747,6 +951,9 @@ function _M.available_servers()
         local type = upstream_types[u]
         if not type then
             type = "ws"
+        end
+        if type == "rpc" then
+            type = "http"
         end
         type = type .. "://" 
 
