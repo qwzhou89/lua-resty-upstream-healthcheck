@@ -312,7 +312,7 @@ local function check_peer_rpc(ctx, id, peer, is_backup)
     local res, err = httpc:request({
         path = "/",
         method = "POST",
-        body = rpc_cmd_check,
+        body = rpc_cmd_check[1],
         headers = {
           ["Content-Type"] = "application/json",
         }
