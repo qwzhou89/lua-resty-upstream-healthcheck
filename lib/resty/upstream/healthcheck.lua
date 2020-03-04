@@ -876,15 +876,15 @@ local function gen_peers_status_info(peers, bits, idx)
         bits[idx + 2] = peer.name
 
         if peer.down then
-            bits[idx + 3] = " DOWN"
+            bits[idx + 3] = "\tDOWN"
         else
-            bits[idx + 3] = " up"
+            bits[idx + 3] = "\tup"
         end
 
-        sum = log_dict:get("us_time-sum-" .. srv["addr"])
-        nb = log_dict:get("us_time-nb-" .. srv["addr"])
+        sum = log_dict:get("us_time-sum-" .. peer.name)
+        nb = log_dict:get("us_time-nb-" .. peer.name)
         if nb and sum then
-            bits[idx + 4] = "\t" .. sum / nb .. "(" .. nb .. "reqs)\n"
+            bits[idx + 4] = "\t" .. sum / nb .. "(" .. nb .. " reqs)\n"
         else
             bits[idx + 4] = "\t(0 reqs)\n"
         end
