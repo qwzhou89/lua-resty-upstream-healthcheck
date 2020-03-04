@@ -9,6 +9,7 @@ local sub = string.sub
 local re_find = ngx.re.find
 local new_timer = ngx.timer.at
 local shared = ngx.shared
+local log_dict = ngx.shared.log_dict
 local debug_mode = ngx.config.debug
 local concat = table.concat
 local tonumber = tonumber
@@ -867,18 +868,28 @@ function _M.spawn_checker(opts)
 end
 
 local function gen_peers_status_info(peers, bits, idx)
-    local npeers = #peers
+    local npeers = #peers, sum, nb
     for i = 1, npeers do
         local peer = peers[i]
         bits[idx] = "        "
         bits[idx + 1] = peer.id .. " "
         bits[idx + 2] = peer.name
+
         if peer.down then
-            bits[idx + 3] = " DOWN\n"
+            bits[idx + 3] = " DOWN"
         else
-            bits[idx + 3] = " up\n"
+            bits[idx + 3] = " up"
         end
-        idx = idx + 4
+
+        sum = log_dict:get("us_time-sum-" .. srv["addr"])
+        nb = log_dict:get("us_time-nb-" .. srv["addr"])
+        if nb and sum then
+            bits[idx + 4] = "\t" .. sum / nb .. "(" .. nb .. "reqs)\n"
+        else
+            bits[idx + 4] = "\t(0 reqs)\n"
+        end
+
+        idx = idx + 5
     end
     return idx
 end
@@ -891,7 +902,7 @@ function _M.status_page()
     end
 
     local n = #us
-    local bits = new_tab(n * 20, 0)
+    local bits = new_tab(n * 250, 0)
     local idx = 1
     for i = 1, n do
         if i > 1 then
